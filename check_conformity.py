@@ -1,8 +1,10 @@
-from stable_baselines.common.env_checker import check_env
+import gymnasium
+from gymnasium.utils.env_checker import check_env
+# from gym_cache.envs.cache_env import CacheEnv
 
 # env = CustomEnv(arg1, ...)
-# env = gym.make('gym_cache:Cache-v0')
-env = CacheEnv()
+env = gymnasium.make('gym_cache:Cache-v0')
+# env = CacheEnv('data/MWT2_processed', 10 * 1024 * 1024 * 1024)
 
 # It will check your custom environment and output additional warnings if needed
-check_env(env)
+check_env(env.unwrapped)

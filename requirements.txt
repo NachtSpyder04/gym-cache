@@ -3,5 +3,6 @@ wheel
 tqdm
 twine
 pandas
-gym
-stable_baselines
+gymnasium
+pyarrow
+fastparquet

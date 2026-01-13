@@ -2,10 +2,10 @@
 # import time
 # import signal
 # import matplotlib.pyplot as plt
-import gym
-from gym import spaces
-# from gym import error, utils
-from gym.utils import seeding
+import gymnasium as gymn
+from gymnasium import spaces
+# from gymnasium import error, utils
+from gymnasium.utils import seeding
 import pandas as pd
 import numpy as np
 
@@ -15,20 +15,20 @@ logger = logging.getLogger(__name__)
 TB = 1024 * 1024 * 1024  # filesize is in kb so here TB is this.
 
 
-class CacheEnv(gym.Env):
+class CacheEnv(gymn.Env):
 
-    metadata = {'render.modes': ['human']}
+    metadata = {'render_modes': ['human'], 'render_fps': 30}
     actions_num = 1  # best guess if the file is in the cache/should be kept in cache
 
-    def __init__(self, InputData, CacheSize):
-
+    def __init__(self, InputData, CacheSize, render_mode='human'):
+        self.render_mode = render_mode
         self.name = '{}TB'.format(CacheSize/TB)
         self.actor_name = 'default'
 
         self.accesses_filename = InputData + '.pa'
 
         self.load_access_data()
-        self.seed()  # probably not needed
+      #  self.seed()  # probably not needed
 
         self.cache_value_weight = 1.0  # applies only on files already in cache
 
@@ -56,9 +56,9 @@ class CacheEnv(gym.Env):
         self.observation_space = spaces.Box(
             # first 6 are tokens, 7th is filesize, 8th is how full is cache at the moment
             low=np.array([0, 0, 0, 0, 0, 0, 0, 0]),
-            high=np.array([maxes[0], maxes[1], maxes[2], maxes[3],
-                           maxes[4], maxes[5], maxes[6], 100]),
-            dtype=np.int32
+            high=np.array([maxes.iloc[0], maxes.iloc[1], maxes.iloc[2], maxes.iloc[3],
+                           maxes.iloc[4], maxes.iloc[5], maxes.iloc[6], 100]),
+            dtype=np.int64
         )
         print('environment loaded!  cache size [kB]:', self.cache_size)
 
@@ -78,16 +78,13 @@ class CacheEnv(gym.Env):
         mdata.to_parquet('results/' + self.name + '_' +
                          self.actor_name + '.pa', engine='pyarrow')
 
-    def seed(self, seed=None):
-        self.np_random, seed = seeding.np_random(seed)
-        return [seed]
 
     def _cache_cleanup(self):
         # create dataframe from cache info
         acc = pd.DataFrame.from_dict(self.cache_content, orient='index', columns=[
                                      'accNo', 'fs', 'action'])
         # move accesses that we want kept to much later times
-        acc['accNo'] = acc['accNo'] + acc['action']*1000000
+        acc.loc[:,'accNo'] = acc['accNo'] + acc['action']*1000000
         # order files by access instance (equivalent of time)
         acc.sort_values(by='accNo', axis=0, inplace=True)
         # starting from lowest number remove from cache
@@ -110,7 +107,7 @@ class CacheEnv(gym.Env):
         if (self.found_in_cache and action == 0) or (not self.found_in_cache and action == 1):
             reward = -reward
 
-        if self.fID:  # check that this is not the first access
+        if self.fID in self.cache_content:  # check that this is not the first access
             # remember what is the action
             prevCacheContent = self.cache_content[self.fID]
             self.cache_content[self.fID] = (
@@ -146,22 +143,39 @@ class CacheEnv(gym.Env):
         self.files_processed += 1
         self.data_processed += fs
 
-        state = [row['1'], row['2'], row['3'], row['4'], row['5'], row['6'],
+        state = [row.iloc[1], row.iloc[2], row.iloc[3], row.iloc[4], row.iloc[5], row.iloc[6],
                  fs, self.cache_kbytes * 100 // self.cache_size]
 
-        if self.files_processed == self.total_accesses:
+        # Add terminated and truncated flags
+        terminated = False
+        truncated = False    
+        if self.files_processed >= self.total_accesses:
             self.save_monitoring_data()
-            self.done = True
-        return np.array(state), int(reward), self.done, {}
+            terminated = True
+        return np.array(state), int(reward), terminated, truncated, {}
+    
+    def reset(self, seed=None, options=None):
 
-    def reset(self):
+        #Add seed and options arguments
+        super().reset(seed=seed)
+        if seed is not None:
+            self.np_random, _ = seeding.np_random(seed)
+
+        row = self.accesses.iloc[0]
         self.files_processed = 0
         self.cache_content = {}
         self.cache_kbytes = 0
         self.monitoring = []
-        self.done = False
-
-        return self.step(0)[0]
+        self.fID = row['fID']
+        self.found_in_cache = False
+        self.weight = 0
+        fs = row['kB']
+       # print('dtype for observation space:', self.observation_space.dtype)
+        
+        obs = np.array([row.iloc[1], row.iloc[2], row.iloc[3], row.iloc[4], row.iloc[5], row.iloc[6],
+                 fs, self.cache_kbytes * 100 // self.cache_size])
+      #  print('dtype for obs ', obs.dtype)
+        return obs, {}
 
     def render(self, mode='human'):
         # screen_width = 600
@@ -178,6 +192,8 @@ class CacheEnv(gym.Env):
         return
 
     def close(self):
+        if len(self.monitoring) > 0:
+            self.save_monitoring_data()
         if self.viewer:
             self.viewer.close()
             self.viewer = None
